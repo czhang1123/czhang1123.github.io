@@ -1,0 +1,257 @@
+---
+title: "Practical Machine Learning Project"
+author: "C. Zhang"
+date: "July 8, 2016"
+output: html_document
+---
+
+## Executive Summary
+
+In this study, we want to predict a person's manner of performing barbell lifts, given data from accelerometers on the belt, forearm, arm, and dumbell. Various machine learning models were explored and built, with out of sample error reported out. The best performing model, which is a random forest model, achieves almost 100% accuracy on a new data sample.
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. The other variables were explored to predict the response variable. This report describes how I built the model, how I used cross validation, what I think the expected out of sample error is, and why I made the choices I did. I also used my prediction model to predict 20 different test cases.
+
+## Data
+
+The training data for this project are available here:
+[https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+The test data are available here:
+[https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+The data for this project come from this source: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har).
+
+Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz4DVTtS3gC
+
+The response variable "classe" has 5 levels: A, B, C, D, E, explained in below.
+
+* exactly according to the specification (Class A)
+* throwing the elbows to the front (Class B)
+* lifting the dumbbell only halfway (Class C)
+* lowering the dumbbell only halfway (Class D) 
+* throwing the hips to the front (Class E)
+
+```{r, echo=FALSE, results='hide', message=FALSE, warning=FALSE}
+# Load required packages
+require(ggplot2)
+require(knitr)
+require(rmarkdown)
+require(stats)
+require(MASS)
+require(lmtest)
+require(caret)
+require(e1071)
+require(nnet)
+require(rpart)
+require(rattle)
+require(rpart.plot)
+require(randomForest)
+```
+
+Load in the data and check out the variables and the data.
+
+```{r, results='hide'}
+train <- read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', header=T)
+test <- read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv', header=T)
+str(train); summary(train); summary(train$classe); str(test)
+```
+
+According to the structure and summary of the training data, there are 19622 observations and 160 variables. Testing data has 20 observations.
+
+## Data Preprocessing
+
+Some data cleansing and preprocessing need to be done before building model. We will process the training and testing data in the same way.
+
+### Remove near zero variance variables
+
+Some variables have no variability at all. These variables are not useful when we want to construct a prediction model. The code below will remove these variables. As a result, 60 out of 159 covariates were removed.
+
+```{r}
+zerovar <- nearZeroVar(train, saveMetrics = T)
+train <- (train[,-which(zerovar$nzv==T)]); test <- (test[,-which(zerovar$nzv==T)])
+kable(head(zerovar[zerovar$nzv==T, ], 5))
+```
+
+### Remove row number variable
+
+Below code confirms that variable "X" is identical to row number, hence got removed.
+
+```{r, results='hide'}
+identical(seq(nrow(train)), train$X); identical(seq(nrow(test)), test$X); 
+train <- subset(train, select = -X); test <- subset(test, select = -X) 
+```
+
+### Remove variables with large amount of missing values
+
+Below code removes all variable with more than half NA values. 
+
+```{r, results='hide'}
+keepval <- which(apply(train, 2, function(col){sum(is.na(col))/nrow(train)}) < .5)
+train <- train[keepval]; test <- test[keepval]
+sum(is.na(train)); sum(is.na(test))
+```
+
+Now we have 57 covariates left. Training and testing data now have no missing value.
+
+### Remove time and date variables
+
+Based on the context of the data collection, the response variable is unlikely to be dependent of time therefore all the time and/or date related variables are removed.
+
+```{r, results='hide'}
+train <- subset(train, select = -c(raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp)) 
+test <- subset(test, select = -c(raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp)) 
+```
+
+Now the data is quite clean. 
+
+### Normalize data
+
+It may be better to normalize the data by centralizing and scaling each variable since it help reducing bias and high variation. Code below does the normalization.
+
+```{r, results='hide'}
+normalize <- preProcess(train, method=c("center", "scale"))
+train_std <- predict(normalize, train); test_std <- predict(normalize, test); 
+```
+
+### Split to training and testing data
+
+Now data preprocessing is complete. We randomly select 20% data from training data to set aside as testing data. This is necessary to get a true measurement of model performance by applying the model on a brand new dataset that has not been used in model building or selection in any sort of way. The 20 sample original testing data has no response variable and also is too small for this purpose. Below R code does the data splitting.
+
+```{r, results='hide'}
+set.seed(123)
+inTrain <- createDataPartition(y=train_std$classe, p=0.8, list=FALSE)
+train <- train_std[inTrain, ]; test <- train_std[-inTrain, ]
+```
+
+## Model Building and Selection
+
+We are finally ready to try out some models.
+
+### SVM
+
+Below code builds a SVM model and check the model performance on the testing set. The overall accuracy on the test data is very high, 95%. The confusion matrix is also printed out below.
+
+```{r}
+svm <- svm(classe ~ .,  data = train) # build model
+cm <- confusionMatrix(test$classe, predict(svm, test));
+cm$overall[1]; kable(cm$table); rm(svm) # print out performance metrics
+```
+
+### Linear Discriminant Analysis
+
+Now let us try a simple Linear Discriminant Analysis model. This model runs very fast. However, overall accuracy on the test data is much lower than SVM, 74%.
+
+```{r}
+lda <- train(classe ~ ., data = train, method="lda") # build model
+cm <- confusionMatrix(test$classe, predict(lda, test)); 
+cm$overall[1]; rm(lda)
+```
+
+### Multinomial Logistic Regression
+
+How about a multinomial logistic regression model? Overall accuracy on the test data is 77%.
+
+```{r, message=FALSE}
+logi <- multinom(classe ~ ., data = train) # build model
+cm <- confusionMatrix(test$classe, predict(logi, test)); 
+cm$overall[1]; rm(logi)
+```
+
+### Decision Tree
+
+Now let us try a decision tree. Overall accuracy on the test data is 74%.
+
+```{r}
+tree <- rpart(classe ~ ., data = train, method = 'class') # build model
+cm <- confusionMatrix(test$classe, predict(tree, test, type = 'class'))
+cm$overall[1]
+```
+
+For illustration purpose, below code plots the tree structure.
+
+```{r, fig.width=17, fig.height=13}
+fancyRpartPlot(tree, cex = 0.7); rm(tree)
+```
+
+### Random Forest
+
+How about a random forest, which is supposed to outperform decision tree. Let us prove it. Overall accuracy on test data is nearly 100%!
+
+```{r, message=FALSE}
+trainctr <- trainControl(method = 'none')
+# just build one model without resampling, cross-validation or tuning:
+rf <- train(classe ~ ., data = train, method = 'rf', ntree = 500, trControl = trainctr, tuneLength = 1)
+cm <- confusionMatrix(test$classe, predict(rf, test))
+cm$overall[1]; rm(rf)
+```
+
+Since random forest seems to produce the best model, let us run some cross validation to ensure everything looks good. Below code performs a 5 fold cross validation. The performance might be lower than on the test data since the training set shrunk to accommodate cross validation, but it should not be too far off. Note that the performance metrics are same as before since the same training data has been used to build the final model. Turns out that the cross validation has an accuracy of ~100%, which is same as that of the test dataset.
+
+```{r}
+set.seed(123)
+trainctr <- trainControl(method='cv', number = 5)
+# just build one model without resampling, cross-validation or tuning:
+rf <- train(classe ~ ., data = train, method = 'rf', ntree = 500, trControl = trainctr, tuneLength = 1)
+cm <- confusionMatrix(test$classe, predict(rf, test))
+cm$overall[1]; kable(cm$table) # print out performance metrics 
+rf # print out cross validation results
+```
+
+### Comparison between Different Machine Learning Algorithms
+
+In this study, we tried out 5 machine learning methods to build a model: SVM, Linear Discriminant Analysis, Multinomial Logistic Regression, Decision Tree, and Random Forest. For our data, Random Forest and SVM, both with 90%+ accuracy on a hold out test dataset, significantly outperform the rest three approaches, which had ~75% accuracy on the same test dataset. Random Forest even achieved near perfect classification on the test data. We also performed 5 fold cross validation on the Random Forest model, and the overall accuracy on the validation datasets is on average almost same as that for test dataset. Therefore everything looks good, and the Random Forest model is the winner and will be applied to classify the 20 sample test data.
+
+## Additional Thoughts
+
+Before we wrap up, it is worth to discuss if Principal Component Analysis (PCA) is useful here.
+
+Below code generates correlation matrix, and print out all pairs of highly correlated variables (correlation > 0.7). 
+
+```{r, results='hide'}
+corr<-cor(train[, sapply(train, is.numeric)]); corr<-round(corr, 2); corr[lower.tri(corr, diag = T)]=0
+for (i in 1:nrow(corr))
+{
+        for (j in 1:ncol(corr)) {
+                if (corr[i,j] > 0.7 )
+                        print(c(dimnames(corr)[[1]][i], dimnames(corr)[[1]][j], corr[i,j]))
+        }
+}
+```
+
+In traditional statistics context, we can examine these variables individually to decide whether or not drop them from the model. In machine learning context, we can apply PCA to reduce the number of variables.
+
+We will set the threshold of PCA to capture 99% variation in the data. PCA works best on standardized data. Below code first standardize the data by centralizing and scaling, then apply PCA. Number of covariates is reduced from 54 to 38. Then split the data to training and testing sets as usual.
+
+```{r, results='hide'}
+# Apply PCA while preserving 99% variation
+pca <- preProcess(subset(train_std, select = -classe), method="pca", thresh=0.99)
+pcadata <- predict(pca, train_std)
+c(ncol(train_std) - 1, ncol(pcadata) - 1)
+
+# Split to training and testing sets
+set.seed(123)
+inTrain <- createDataPartition(y=pcadata$classe, p=0.8, list=FALSE)
+train_pca <- pcadata[inTrain, ]; test_pca <- pcadata[-inTrain, ]
+```
+
+Now use the post PCA data to train a decision tree. Turns out the performance (52% accuracy on test data) is much worse for the data with PCA processing, compared to the original data (74% accuracy on test data), even though we preserved 99% of the variation in the data. Therefore, for this problem, PCA downgrades the model performance a lot, and we need to take caution when we apply PCA.
+
+```{r}
+tree_pca <- rpart(classe ~ ., data = train_pca, method = 'class') # build model
+cm <- confusionMatrix(test_pca$classe, predict(tree_pca, test_pca, type = 'class'))
+cm$overall[1] # print out performance metrics 
+```
+
+## Score the 20 Sample Test Data
+
+Finally we can use the Random Forest model to score the 20 sample test set, and here are the results:
+
+```{r}
+predict(rf, test_std)
+```
+
+
