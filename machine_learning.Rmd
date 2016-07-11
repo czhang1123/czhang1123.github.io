@@ -7,7 +7,7 @@ output: html_document
 
 ## Executive Summary
 
-In this study, we want to predict a person's manner of performing barbell lifts, given data from accelerometers on the belt, forearm, arm, and dumbell. Various machine learning models were explored and built, with out of sample error reported out. The best performing model, which is a random forest model, achieves almost 100% accuracy on a new data sample.
+In this study, we want to predict a person's manner of performing barbell lifts, given data from accelerometers on the belt, forearm, arm, and dumbell. Various machine learning models were explored and built, with out of sample error reported out. The best performing model, which is a random forest model, achieves almost 100% accuracy on a new data sample, which gives the true out of sample error of less than 0.5%. The error on cross validation using 5 fold cross validation is also less than 0.5%. We then used the final model to classify the 20 sample test set.
 
 ## Background
 
@@ -189,7 +189,7 @@ cm <- confusionMatrix(test$classe, predict(rf, test))
 cm$overall[1]; rm(rf)
 ```
 
-Since random forest seems to produce the best model, let us run some cross validation to ensure everything looks good. Below code performs a 5 fold cross validation. The performance might be lower than on the test data since the training set shrunk to accommodate cross validation, but it should not be too far off. Note that the performance metrics are same as before since the same training data has been used to build the final model. Turns out that the cross validation has an accuracy of ~100%, which is same as that of the test dataset.
+Since random forest seems to produce the best model, let us run some cross validation to ensure everything looks good. Below code performs a 5 fold cross validation. The performance might be lower than on the test data since the training set shrunk to accommodate cross validation, but it should not be too far off. Turns out that the cross validation has an accuracy of ~100%, which is same as that of the test dataset. The true out of sample error is less than 0.5% using a hold out test dataset. The error on cross validation using 5 fold cross validation is also less than 0.5%. 
 
 ```{r}
 set.seed(123)
